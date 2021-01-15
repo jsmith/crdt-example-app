@@ -1,54 +1,54 @@
-let express = require('express');
-let sqlite3 = require('better-sqlite3');
-let bodyParser = require('body-parser');
-let cors = require('cors');
-let { Timestamp } = require('../shared/timestamp');
-let merkle = require('../shared/merkle');
+import express from "express";
+import sqlite3 from "better-sqlite3";
+import bodyParser from "body-parser";
+import cors from "cors";
+import { Timestamp } from "./shared/timestamp";
+import * as merkle from "./shared/merkle";
 
-let db = sqlite3(__dirname + '/db.sqlite');
+let db = sqlite3(__dirname + "/db.sqlite");
 let app = express();
 app.use(cors());
-app.use(bodyParser.json({ limit: '20mb' }));
+app.use(bodyParser.json({ limit: "20mb" }));
 
-function queryAll(sql, params = []) {
+function queryAll(sql: string, params: any[] = []) {
   let stmt = db.prepare(sql);
   return stmt.all(...params);
 }
 
-function queryRun(sql, params = []) {
+function queryRun(sql: string, params: any[] = []) {
   let stmt = db.prepare(sql);
   return stmt.run(...params);
 }
 
-function serializeValue(value) {
+function serializeValue(value: null | number | string) {
   if (value === null) {
-    return '0:';
-  } else if (typeof value === 'number') {
-    return 'N:' + value;
-  } else if (typeof value === 'string') {
-    return 'S:' + value;
+    return "0:";
+  } else if (typeof value === "number") {
+    return "N:" + value;
+  } else if (typeof value === "string") {
+    return "S:" + value;
   }
 
-  throw new Error('Unserializable value type: ' + JSON.stringify(value));
+  throw new Error("Unserializable value type: " + JSON.stringify(value));
 }
 
-function deserializeValue(value) {
+function deserializeValue(value: string): null | string | number {
   const type = value[0];
   switch (type) {
-    case '0':
+    case "0":
       return null;
-    case 'N':
+    case "N":
       return parseFloat(value.slice(2));
-    case 'S':
+    case "S":
       return value.slice(2);
   }
 
-  throw new Error('Invalid type key for value: ' + value);
+  throw new Error("Invalid type key for value: " + value);
 }
 
-function getMerkle(group_id) {
-  let rows = queryAll('SELECT * FROM messages_merkles WHERE group_id = ?', [
-    group_id
+function getMerkle(group_id: string) {
+  let rows = queryAll("SELECT * FROM messages_merkles WHERE group_id = ?", [
+    group_id,
   ]);
 
   if (rows.length > 0) {
@@ -60,10 +60,12 @@ function getMerkle(group_id) {
   }
 }
 
-function addMessages(groupId, messages) {
+type TODO = any;
+
+function addMessages(groupId: string, messages: TODO) {
   let trie = getMerkle(groupId);
 
-  queryRun('BEGIN');
+  queryRun("BEGIN");
 
   try {
     for (let message of messages) {
@@ -82,19 +84,19 @@ function addMessages(groupId, messages) {
     }
 
     queryRun(
-      'INSERT OR REPLACE INTO messages_merkles (group_id, merkle) VALUES (?, ?)',
+      "INSERT OR REPLACE INTO messages_merkles (group_id, merkle) VALUES (?, ?)",
       [groupId, JSON.stringify(trie)]
     );
-    queryRun('COMMIT');
+    queryRun("COMMIT");
   } catch (e) {
-    queryRun('ROLLBACK');
+    queryRun("ROLLBACK");
     throw e;
   }
 
   return trie;
 }
 
-app.post('/sync', (req, res) => {
+app.post("/sync", (req, res) => {
   let { group_id, client_id, messages, merkle: clientMerkle } = req.body;
 
   let trie = addMessages(group_id, messages);
@@ -103,29 +105,29 @@ app.post('/sync', (req, res) => {
   if (clientMerkle) {
     let diffTime = merkle.diff(trie, clientMerkle);
     if (diffTime) {
-      let timestamp = new Timestamp(diffTime, 0, '0').toString();
+      let timestamp = new Timestamp(diffTime, 0, "0").toString();
       newMessages = queryAll(
         `SELECT * FROM messages WHERE group_id = ? AND timestamp > ? AND timestamp NOT LIKE '%' || ? ORDER BY timestamp`,
         [group_id, timestamp, client_id]
       );
 
-      newMessages = newMessages.map(msg => ({
+      newMessages = newMessages.map((msg) => ({
         ...msg,
-        value: deserializeValue(msg.value)
+        value: deserializeValue(msg.value),
       }));
     }
   }
 
   res.send(
     JSON.stringify({
-      status: 'ok',
-      data: { messages: newMessages, merkle: trie }
+      status: "ok",
+      data: { messages: newMessages, merkle: trie },
     })
   );
 });
 
-app.get('/ping', (req, res) => {
-  res.send('ok');
+app.get("/ping", (req, res) => {
+  res.send("ok");
 });
 
 app.listen(8006);

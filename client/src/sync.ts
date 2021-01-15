@@ -1,43 +1,55 @@
+import { Data, DataKeys, Message, _data, _messages } from "./db";
+import { Timestamp } from "./shared/timestamp";
+import * as merkle from "./shared/merkle";
+import { getClock, makeClientId, makeClock, setClock } from "./clock";
+import { SERVER_URL } from "./env";
+
 setClock(makeClock(new Timestamp(0, 0, makeClientId())));
 
-let _onSync = null;
+type TODO = any;
+
+let _onSync: (() => void) | null = null;
 let _syncEnabled = true;
 
-function setSyncingEnabled(flag) {
+export function setSyncingEnabled(flag: boolean) {
   _syncEnabled = flag;
 }
 
-async function post(data) {
-  let res = await fetch('https://crdt.jlongster.com/server/sync', {
-    method: 'POST',
+async function post(data: TODO) {
+  let res = await fetch(`${SERVER_URL}/sync`, {
+    method: "POST",
     body: JSON.stringify(data),
     headers: {
-      'Content-Type': 'application/json'
-    }
+      "Content-Type": "application/json",
+    },
   });
-  res = await res.json();
 
-  if (res.status !== 'ok') {
-    throw new Error('API error: ' + res.reason);
+  const json = await res.json();
+
+  if (json.status !== "ok") {
+    throw new Error("API error: " + json.reason);
   }
-  return res.data;
+
+  return json.data;
 }
 
-function apply(msg) {
-  let table = _data[msg.dataset];
+function apply<K extends DataKeys, C extends Data[K] & string>(
+  msg: Message<K, C>
+) {
+  let table: Array<{ id: string }> = _data[msg.dataset];
   if (!table) {
-    throw new Error('Unknown dataset: ' + msg.dataset);
+    throw new Error("Unknown dataset: " + msg.dataset);
   }
 
-  let row = table.find(row => row.id === msg.row);
+  let row = table.find((row) => row.id === msg.row);
   if (!row) {
     table.push({ id: msg.row, [msg.column]: msg.value });
   } else {
-    row[msg.column] = msg.value;
+    (row as any)[msg.column] = msg.value;
   }
 }
 
-function compareMessages(messages) {
+function compareMessages(messages: Message<any, any>[]) {
   let existingMessages = new Map();
 
   // This could be optimized, but keeping it simple for now. Need to
@@ -53,9 +65,9 @@ function compareMessages(messages) {
     return 0;
   });
 
-  messages.forEach(msg1 => {
+  messages.forEach((msg1) => {
     let existingMsg = sortedMessages.find(
-      msg2 =>
+      (msg2) =>
         msg1.dataset === msg2.dataset &&
         msg1.row === msg2.row &&
         msg1.column === msg2.column
@@ -67,11 +79,13 @@ function compareMessages(messages) {
   return existingMessages;
 }
 
-function applyMessages(messages) {
+function applyMessages(messages: Message[]) {
   let existingMessages = compareMessages(messages);
   let clock = getClock();
 
-  messages.forEach(msg => {
+  messages.forEach((msg) => {
+    if (!clock) throw Error("Clock needs to be set first");
+
     let existingMsg = existingMessages.get(msg);
 
     if (!existingMsg || existingMsg.timestamp < msg.timestamp) {
@@ -90,24 +104,27 @@ function applyMessages(messages) {
   _onSync && _onSync();
 }
 
-function sendMessages(messages) {
+export function sendMessages(messages: Message[]) {
   applyMessages(messages);
   sync(messages);
 }
 
-function receiveMessages(messages) {
-  messages.forEach(msg =>
+function receiveMessages(messages: Message[]) {
+  messages.forEach((msg) =>
     Timestamp.recv(getClock(), Timestamp.parse(msg.timestamp))
   );
 
   applyMessages(messages);
 }
 
-function onSync(func) {
+export function onSync(func: () => void) {
   _onSync = func;
 }
 
-async function sync(initialMessages = [], since = null) {
+export async function sync(
+  initialMessages: Message[] = [],
+  since: number | null = null
+): Promise<void> {
   if (!_syncEnabled) {
     return;
   }
@@ -115,20 +132,20 @@ async function sync(initialMessages = [], since = null) {
   let messages = initialMessages;
 
   if (since) {
-    let timestamp = new Timestamp(since, 0, '0').toString();
-    messages = _messages.filter(msg => msg.timestamp >= timestamp);
+    let timestamp = new Timestamp(since, 0, "0").toString();
+    messages = _messages.filter((msg) => msg.timestamp >= timestamp);
   }
 
   let result;
   try {
     result = await post({
-      group_id: 'my-group',
+      group_id: "my-group",
       client_id: getClock().timestamp.node(),
       messages,
-      merkle: getClock().merkle
+      merkle: getClock().merkle,
     });
   } catch (e) {
-    throw new Error('network-failure');
+    throw new Error("network-failure");
   }
 
   if (result.messages.length > 0) {
@@ -140,12 +157,12 @@ async function sync(initialMessages = [], since = null) {
   if (diffTime) {
     if (since && since === diffTime) {
       throw new Error(
-        'A bug happened while syncing and the client ' +
-          'was unable to get in sync with the server. ' +
+        "A bug happened while syncing and the client " +
+          "was unable to get in sync with the server. " +
           "This is an internal error that shouldn't happen"
       );
     }
 
-    return sync([], diffTime);
+    await sync([], diffTime);
   }
 }
